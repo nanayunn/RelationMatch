@@ -187,6 +187,25 @@ def get_transform(mean, std, crop_size, train=True):
         return transforms.Compose([transforms.ToTensor(),
                                    transforms.Normalize(mean, std)])
 
+# 새로운 MultiCropTransform 클래스를 정의합니다.
+class MultiCropTransform:
+    def __init__(self, global_transform, local_transform, num_local_crops=1):
+        """
+        Args:
+            global_transform: 원본 이미지에 적용할 글로벌(weak) augmentation transform.
+            local_transform: local crop을 생성할 augmentation transform.
+            num_local_crops: 생성할 local crop의 개수.
+        """
+        self.global_transform = global_transform
+        self.local_transform = local_transform
+        self.num_local_crops = num_local_crops
+
+    def __call__(self, img):
+        global_view = self.global_transform(img)
+        local_views = [self.local_transform(img) for _ in range(self.num_local_crops)]
+        # 반환값은 (global_view, [local_view1, local_view2, ...]) 형태입니다.
+        return global_view, local_views
+
 
 class SSL_Dataset:
     """
@@ -326,11 +345,88 @@ class SSL_Dataset:
         with open(output_path, 'w') as w:
             json.dump(out, w)
         # print(Counter(ulb_targets.tolist()))
-        lb_dset = BasicDataset(self.alg, lb_data, lb_targets, self.num_classes,
-                               self.transform, False, None, onehot)
 
         ulb_dset = BasicDataset(self.alg, ulb_data, ulb_targets, self.num_classes,
                                 self.transform, True, strong_transform, onehot)
         # print(lb_data.shape)
         # print(ulb_data.shape)
         return lb_dset, ulb_dset
+    def get_crop_ssl_dset(self, num_labels, index=None, include_lb_to_ulb=True,
+                        strong_transform=None, onehot=False):
+        """
+        get_crop_ssl_dset 함수는 labeled 데이터를 global crop과 local crop 형태로 나누어 반환합니다.
+        
+        Args:
+            num_labels: 사용할 labeled 데이터 개수
+            index: 특정 index를 사용하여 데이터를 샘플링할 경우 해당 index 제공 (default: None)
+            include_lb_to_ulb: (사용되지 않음, 기존 코드 유지)
+            strong_transform: strong augmentation 적용 여부 (사용되지 않음, 기존 코드 유지)
+            onehot: True이면 라벨을 one-hot vector로 변환
+            
+        Returns:
+            lb_dset_global: Global crop이 적용된 labeled dataset
+            lb_dset_local: Local crop이 적용된 labeled dataset
+        """
+        if self.alg == 'fullysupervised':
+            lb_data, lb_targets = self.get_data()
+            lb_dset_global = BasicDataset(self.alg, lb_data, lb_targets, self.num_classes,
+                                        self.transform, False, None, onehot)
+            return lb_dset_global, None
+
+        if self.name.upper() == 'STL10':
+            lb_data, lb_targets, _ = self.get_data()
+            lb_data, lb_targets, _ = sample_labeled_data(self.args, lb_data, lb_targets, num_labels, self.num_classes)
+        else:
+            data, targets = self.get_data()
+            lb_data, lb_targets, _, _ = split_ssl_data(self.args, data, targets,
+                                                    num_labels, self.num_classes,
+                                                    index, include_lb_to_ulb)
+
+        # Global crop을 적용한 labeled dataset
+        lb_dset_global = BasicDataset(self.alg, lb_data, lb_targets, self.num_classes,
+                                    self.transform, False, None, onehot)
+
+        # Local crop 설정
+        num_crops = getattr(self.args, "num_crops_lb", 2)
+
+        if self.name.upper() == 'CIFAR10':
+            local_crop_transform = transforms.Compose([
+                transforms.RandomHorizontalFlip(),
+                transforms.RandomCrop(24, padding=4, padding_mode='reflect'),
+                transforms.ToTensor(),
+                transforms.Normalize(mean["cifar10"], std["cifar10"])
+            ])
+        elif self.name.upper() == 'STL10':
+            local_crop_transform = transforms.Compose([
+                transforms.RandomHorizontalFlip(),
+                transforms.RandomCrop(64, padding=8, padding_mode='reflect'),
+                transforms.ToTensor(),
+                transforms.Normalize(mean["stl10"], std["stl10"])
+            ])
+        elif self.name.upper() == 'IMAGENET':
+            local_crop_transform = transforms.Compose([
+                transforms.RandomResizedCrop(128, scale=(0.4, 1.0)),
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                transforms.Normalize(mean["imagenet"], std["imagenet"])
+            ])
+        else:
+            local_crop_transform = transforms.Compose([
+                transforms.RandomResizedCrop(32, scale=(0.5, 1.0)),
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                transforms.Normalize(mean[self.name], std[self.name])
+            ])
+
+        # MultiCropTransform 적용
+        multi_crop_transform = MultiCropTransform(
+            global_transform=self.transform,  # Global Transform 유지
+            local_transform=local_crop_transform,  # Local Crop 적용
+            num_local_crops=num_crops
+        )
+
+        # Local crop을 적용한 labeled dataset
+        lb_dset_local = BasicDataset(self.alg, lb_data, lb_targets, self.num_classes,
+                                    multi_crop_transform, False, None, onehot)
+
+        return lb_dset_global, lb_dset_local
