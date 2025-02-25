@@ -46,3 +46,5 @@ mce_gamma: 0.003
 mce_tau: 1.0
 mce_order: 3
 use_feature: False
+use_ulb_crop: True
+use_lb_crop: True

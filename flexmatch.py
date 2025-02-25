@@ -347,6 +347,18 @@ if __name__ == "__main__":
                              'N processes per node, which has N GPUs. This is the '
                              'fastest way to use PyTorch for either single node or '
                              'multi node data parallel training')
+    '''
+    ny Configurations
+    '''
+    parser.add_argument('--use_lb_crop', type=str2bool, default=False)
+    parser.add_argument('--use_ulb_crop', type=str2bool, default=False)
+    # parser.add_argument('-ds', '--dataset', type=str, default='cifar10')
+    # parser.add_argument('--train_sampler', type=str, default='RandomSampler')
+    # parser.add_argument('-nc', '--num_classes', type=int, default=10)
+    # parser.add_argument('--num_workers', type=int, default=1)
+
+    '''
+    
     # config file
     parser.add_argument('--c', type=str, default='')
 
